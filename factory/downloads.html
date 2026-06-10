@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Factory Downloads - VUON EVR</title>
+    <style>
+        :root { --primary: #2e7dff; --bg: #121317; --card: #1a1b23; --border: #2a2b36; --text: #e2e4e9; --success: #00e676; }
+        body { background: var(--bg); color: var(--text); font-family: sans-serif; padding: 40px; display: flex; justify-content: center; }
+        .container { width: 800px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 30px; }
+        h2 { border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: #888; font-size: 12px; text-transform: uppercase; }
+        .btn { padding: 8px 15px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block;}
+        .btn:hover { opacity: 0.9; }
+        .btn-success { background: var(--success); color: black; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 style="color: var(--primary);">VUON Firmware Vault</h2>
+    <p style="color: #aaa;">Download compiled ROMs to flash via USB. Downloading automatically syncs status with the Cloud.</p>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Device ID</th>
+                <th>File Size</th>
+                <th>Generated</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="image_list">
+            <tr><td colspan="4">Loading images...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    const CLOUD_API_URL = 'https://vuon.in'; 
+    const CLOUD_TOKEN = 'Token abad466ea29986f290c591fa29afbaf4ce2feeac';
+    const LOCAL_API_URL = `http://${window.location.hostname}:5005`;
+
+    async function loadImages() {
+        const res = await fetch(`${LOCAL_API_URL}/api/local/list-images`);
+        const images = await res.json();
+        
+        const tbody = document.getElementById('image_list');
+        tbody.innerHTML = '';
+
+        if(images.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4">No images found in /home/vuon_images.</td></tr>';
+            return;
+        }
+
+        images.forEach(img => {
+            const date = new Date(img.created_at * 1000).toLocaleString();
+            
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="font-weight: bold; color: var(--success);">${img.device_id}</td>
+                <td>${img.size_mb} MB</td>
+                <td>${date}</td>
+                <td>
+                    <button class="btn" id="btn_${img.device_id}" onclick="triggerDownload('${img.filename}', '${img.device_id}')">
+                        Download Image
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function triggerDownload(filename, deviceId) {
+        const btn = document.getElementById(`btn_${deviceId}`);
+        
+        // 1. Trigger File Download from Dell Server
+        window.location.href = `${LOCAL_API_URL}/api/local/download/${filename}`;
+
+        // 2. Visual update (Do not disable button!)
+        btn.classList.add('btn-success');
+        btn.innerText = "Downloaded ✓";
+
+        // 3. Ping Django Cloud to update status
+        try {
+            await fetch(`${CLOUD_API_URL}/api/production/submit-report/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': CLOUD_TOKEN },
+                body: JSON.stringify({ device_id: deviceId, status: 'Image Downloaded' })
+            });
+        } catch (e) {
+            console.error("Failed to sync status with cloud:", e);
+        }
+    }
+
+    // Load table on startup
+    loadImages();
+</script>
+
+</body>
+</html>
