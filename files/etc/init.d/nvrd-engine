@@ -9,6 +9,12 @@
 # CRITICALed because /mnt/data/<bk167>/raw didn't exist on a unit baked
 # as anything else, and recorders refused to spawn. Reading the device id
 # at start_service time makes the script identity-portable.
+#
+# -logs-dir none: per-process recorder/remuxer stderr is discarded (no disk
+# logs) to keep disk-constrained units lean — matches the OTA-applied default
+# (disk-reclaim, 2026-06-09). The supervisor's own stderr still flows to
+# procd/syslog, and events.jsonl is unaffected. Set -logs-dir to a path to
+# re-enable per-process disk logging for debugging.
 USE_PROCD=1
 START=93
 STOP=10
@@ -23,7 +29,7 @@ start_service() {
         return 1
     fi
     DATA_ROOT="/mnt/data/$DEVICE_ID"
-    mkdir -p "$DATA_ROOT/raw" "$DATA_ROOT/mp4" "$DATA_ROOT/state" "$DATA_ROOT/logs"
+    mkdir -p "$DATA_ROOT/raw" "$DATA_ROOT/mp4" "$DATA_ROOT/state"
 
     procd_open_instance
     procd_set_param command "$PROG" \
@@ -34,7 +40,7 @@ start_service() {
         -raw-dir   "$DATA_ROOT/raw" \
         -mp4-dir   "$DATA_ROOT/mp4" \
         -state-dir "$DATA_ROOT/state" \
-        -logs-dir  "$DATA_ROOT/logs" \
+        -logs-dir  none \
         -events-file "$DATA_ROOT/events.jsonl" \
         -emmc-monitor-path / \
         -disk-monitor-path /mnt/data
