@@ -1,0 +1,16 @@
+[Unit]
+Description=Vuon Factory Dashboard UI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# Point exactly to where the factory dashboard HTML files live.
+WorkingDirectory=/root/factory_ui
+# Run on standard HTTP port 80
+ExecStart=/usr/bin/python3 -m http.server 80
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
