@@ -5,10 +5,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
-# Point exactly to where the factory dashboard HTML files live.
-WorkingDirectory=/root/factory_ui
-# Run on standard HTTP port 80
-ExecStart=/usr/bin/python3 -m http.server 80
+# The dashboard HTML lives in the repo's factory/ folder (factory.html +
+# downloads.html). Point at <checkout>/factory.
+WorkingDirectory=/root/openwrt-imagebuilder-24.10.4-x86-64.Linux-x86_64/factory
+# Bind localhost only on :8080 — served to staff over HTTPS via the nginx
+# reverse proxy (vuon.in/factory.html, vuon.in/downloads.html), gated by
+# auth_request. Not exposed publicly. (Was port 80 / 0.0.0.0 in the original
+# dell-server setup; on a host that already runs nginx, use this model.)
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1
 Restart=always
 RestartSec=5
 

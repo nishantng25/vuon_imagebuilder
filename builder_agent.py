@@ -378,5 +378,10 @@ def get_status():
 
 if __name__ == '__main__':
     from waitress import serve
-    print("Starting Vuon Factory Builder API on port 5005...")
-    serve(app, host='0.0.0.0', port=5005, threads=4)
+    # Bind host is configurable via BUILDER_BIND. The builder API has no auth
+    # of its own, so on hosts where it's reached through a gated reverse proxy
+    # (nginx auth_request on vuon.in) it MUST bind 127.0.0.1 — never expose
+    # :5005 publicly. Defaults to 0.0.0.0 for backward compat.
+    bind_host = os.environ.get('BUILDER_BIND', '0.0.0.0')
+    print(f"Starting Vuon Factory Builder API on {bind_host}:5005...")
+    serve(app, host=bind_host, port=5005, threads=4)

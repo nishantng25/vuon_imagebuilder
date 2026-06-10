@@ -5,13 +5,19 @@ After=network.target
 [Service]
 Type=simple
 User=root
-# Checkout path of this imagebuilder repo on the build server.
+# Checkout path of this imagebuilder repo on the build server. Must match
+# BUILDER_DIR in builder_agent.py (on this VM that path is a symlink to the
+# repo checkout).
 WorkingDirectory=/root/openwrt-imagebuilder-24.10.4-x86-64.Linux-x86_64
 ExecStart=/usr/bin/python3 builder_agent.py
 Restart=always
 RestartSec=5
 # Keep logs clean and unbuffered so they show up instantly
 Environment=PYTHONUNBUFFERED=1
+# Bind localhost only — the builder API has NO auth of its own. It must be
+# reached solely through the auth-gated reverse proxy (nginx auth_request on
+# vuon.in -> /api/local/). Never expose :5005 publicly.
+Environment=BUILDER_BIND=127.0.0.1
 
 [Install]
 WantedBy=multi-user.target
