@@ -1,0 +1,2 @@
+#!/bin/sh
+/usr/sbin/manage_hdd.sh "$ACTION" "$DEVNAME"

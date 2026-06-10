@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VUON Factory QA</title>
+<!-- Offline QR generator (baked, served by nvrd-core at /qrcode.js). -->
+<script src="/qrcode.js"></script>
+<style>
+  :root{--bg:#0e1116;--card:#171c24;--line:#2a313c;--t1:#e6edf3;--t2:#9aa7b4;
+        --ok:#2ea043;--warn:#d29922;--fail:#f85149;--accent:#2f81f7}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--t1)}
+  #app{max-width:560px;margin:0 auto;padding:20px}
+  h1{font-size:19px;margin:0 0 2px} h2{font-size:15px;margin:0 0 12px}
+  h3{font-size:13px;margin:18px 0 8px;color:var(--t2);text-transform:uppercase;letter-spacing:.5px}
+  .sub{color:var(--t2);font-size:12px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+  .card.gate{border-color:#30363d}
+  input{width:100%;padding:9px 11px;margin:6px 0;background:#0e1116;border:1px solid var(--line);
+        border-radius:7px;color:var(--t1);font-size:14px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:9px 14px;font-size:14px;
+         font-weight:600;cursor:pointer}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.sec{background:#21262d;border:1px solid var(--line)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .tester{display:flex;justify-content:space-between;align-items:center;background:#10261a;
+          border:1px solid #1d4a2e;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+  .check{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .check:last-child{border-bottom:0}
+  .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+  .pass{background:var(--ok)} .warn{background:var(--warn)} .fail{background:var(--fail)}
+  .clabel{flex:1} .cdetail{color:var(--t2);font-size:12px;font-family:ui-monospace,monospace}
+  .crit{font-size:10px;color:var(--fail);border:1px solid var(--fail);border-radius:4px;padding:0 4px;margin-left:6px}
+  .msg{font-size:13px;margin-top:10px;min-height:18px}
+  .msg.err{color:var(--fail)} .msg.ok{color:var(--ok)} .msg.warnt{color:var(--warn)}
+  .summary{font-weight:700;margin:12px 0;padding:10px;border-radius:8px;text-align:center}
+  .summary.go{background:#10261a;border:1px solid #1d4a2e;color:var(--ok)}
+  .summary.no{background:#2a1416;border:1px solid #4a1d20;color:var(--fail)}
+  .hint{color:var(--t2);font-size:11px;margin-top:4px}
+  /* Skip-to-content link — visually hidden until focused. Lets keyboard
+     users skip past any top-of-page chrome. WCAG 2.4.1 Bypass Blocks. */
+  .sr-only-focusable{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
+  .sr-only-focusable:focus{position:static;width:auto;height:auto;display:inline-block;
+    background:var(--accent);color:#fff;padding:8px 12px;border-radius:6px;margin:8px}
+  /* ---- print-only label (TSC printer on the operator's laptop) ----
+     Adjust @page + #label dimensions to your label stock if needed. */
+  #label{display:none}
+  @media print{
+    #app{display:none}
+    #label{display:flex;flex-direction:column;align-items:center;justify-content:center;
+           width:40mm;height:30mm}
+    #qr svg{width:22mm;height:22mm;display:block}
+    #qrtext{font:bold 3.2mm/1 ui-monospace,monospace;margin-top:.9mm;letter-spacing:.3px;color:#000}
+  }
+  @page{size:40mm 30mm;margin:0}
+</style>
+</head>
+<body>
+<a class="sr-only-focusable" href="#main">Skip to main content</a>
+<main id="main" role="main"><div id="app">
+  <h1>VUON&nbsp;·&nbsp;Factory QA</h1>
+  <div class="sub">Device <b id="dev">…</b> &nbsp;·&nbsp; fw <span id="ver">…</span></div>
+
+  <!-- Tester strip (only after sign-in) -->
+  <div class="tester" id="tester" hidden><span>Tester: <b id="testerName"></b></span><button class="sec" onclick="logout()">Sign out</button></div>
+
+  <!-- ===== Hardware self-test (no sign-in required) ===== -->
+  <div class="card">
+    <h2>Hardware self-test</h2>
+    <button id="runBtn" onclick="runTest()">Run Hardware Test</button>
+    <div id="checks"></div>
+    <div id="summary"></div>
+    <div class="hint">Diagnostics run without signing in — use this and the network tools below to bring a unit
+      online first. Signing in is only needed to mark the device ready.</div>
+  </div>
+
+  <!-- ===== Network QA: DHCP <-> Static (no sign-in required) ===== -->
+  <div class="card" id="net">
+    <h3>Network QA — DHCP ⇄ Static</h3>
+    <div class="sub" id="netCur">Run the test to read the current IP.</div>
+    <div class="row">
+      <button class="sec" onclick="setNetDHCP()">Switch to DHCP</button>
+    </div>
+    <div style="margin-top:10px">
+      <input id="sip" placeholder="Static IP — e.g. 192.168.1.50" aria-label="Static IP address">
+      <input id="smask" placeholder="Netmask — e.g. 255.255.255.0" aria-label="Netmask">
+      <input id="sgw" placeholder="Gateway (optional)" aria-label="Gateway (optional)">
+      <input id="sdns" placeholder="DNS, comma-separated (optional)" aria-label="DNS servers, comma-separated (optional)">
+      <button class="sec" onclick="setNetStatic()">Switch to Static</button>
+    </div>
+    <div class="msg warnt" id="netMsg" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="hint">Changing the mode reloads the device network in ~2&nbsp;s. If the IP changes you'll
+      lose this page — reconnect to the new address and re-run the test. A static config with no DNS
+      will break cloud sign-in below, so leave DNS set (or use DHCP) when you need to mark the unit ready.</div>
+  </div>
+
+  <!-- ===== Staff sign-in gate (only for Mark Ready) ===== -->
+  <section class="card gate" id="login">
+    <h2>Staff sign-in</h2>
+    <div class="sub">Sign in with your VUON staff account to mark the device ready — every "device ready"
+      is recorded against you. Requires cloud connectivity (fix the network above first if sign-in fails).</div>
+    <input id="u" placeholder="Staff username" autocomplete="username" aria-label="Staff username">
+    <input id="p" type="password" placeholder="Password" autocomplete="current-password" aria-label="Staff password">
+    <button id="loginBtn" onclick="login()">Sign in</button>
+    <div class="msg" id="loginMsg" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <button class="sec" onclick="printLabel()">🖶 Test print (QR + printer check)</button>
+      <div class="hint">Validates the device-ID QR rendering + this laptop's TSC printer — no sign-in needed.
+        The official READY label prints automatically after a passed test is marked ready.</div>
+    </div>
+  </section>
+
+  <!-- ===== Mark ready + print (staff-gated) ===== -->
+  <div class="card">
+    <h2>Finish</h2>
+    <button id="readyBtn" onclick="markReady()" disabled>Mark Device Ready &amp; Print Label</button>
+    <button class="sec" id="reprintBtn" onclick="printLabel()" hidden>Re-print label</button>
+    <div class="msg" id="readyMsg" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="hint">Enabled only when you're signed in AND all critical checks pass. On success the cloud marks
+      the device Ready (recorded under your account) and a device-ID QR label prints on this laptop's TSC printer.</div>
+  </div>
+</div>
+
+</main>
+<!-- print-only label: device_id QR + device_id text -->
+<div id="label"><div id="qr"></div><div id="qrtext"></div></div>
+
+<script>
+"use strict";
+let staffToken = sessionStorage.getItem("vuon_staff_token") || "";
+let staffName  = sessionStorage.getItem("vuon_staff_name")  || "";
+let deviceId   = "";
+let lastCriticalPass = false;
+
+const $ = (id) => document.getElementById(id);
+const setMsg = (id, text, cls) => { const e = $(id); e.textContent = text || ""; e.className = "msg" + (cls ? " " + cls : ""); };
+
+async function postJSON(url, body){
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{})});
+  let data = {}; try { data = await r.json(); } catch(e){}
+  return {ok: r.ok, status: r.status, data};
+}
+
+// ---- bootstrap: device id/version + restore session ----
+(async function init(){
+  try{
+    const r = await fetch("/api/factory/selftest"); const d = await r.json();
+    deviceId = d.device_id || ""; $("dev").textContent = deviceId || "(unknown)"; $("ver").textContent = d.version || "?";
+  }catch(e){ $("dev").textContent = "(offline)"; }
+  if (staffToken){ showSignedIn(); }
+  updateReadyBtn();
+})();
+
+// Sign-in only toggles the login card + tester strip — the self-test and
+// network tools are always visible so a unit with no cloud can still be
+// diagnosed and brought online before anyone authenticates.
+function showSignedIn(){ $("login").hidden = true; $("tester").hidden = false; $("testerName").textContent = staffName || "staff"; }
+function updateReadyBtn(){ $("readyBtn").disabled = !(lastCriticalPass && staffToken); }
+
+// ---- staff sign-in (relayed to the cloud by nvrd-core) ----
+async function login(){
+  const u = $("u").value.trim(), p = $("p").value;
+  if(!u || !p){ setMsg("loginMsg","Enter username and password.","err"); return; }
+  $("loginBtn").disabled = true; setMsg("loginMsg","Signing in…");
+  const {ok, status, data} = await postJSON("/api/factory/staff-login", {username:u, password:p});
+  $("loginBtn").disabled = false;
+  if(!ok){ setMsg("loginMsg", (data && (data.error||data.detail)) || ("Sign-in failed ("+status+")"), "err"); return; }
+  staffToken = data.token || data.key || "";
+  staffName  = data.name || data.username || u;
+  if(!staffToken){ setMsg("loginMsg","No token returned by server.","err"); return; }
+  sessionStorage.setItem("vuon_staff_token", staffToken);
+  sessionStorage.setItem("vuon_staff_name", staffName);
+  $("p").value = ""; showSignedIn(); updateReadyBtn();
+}
+function logout(){ staffToken=""; staffName=""; sessionStorage.clear(); location.reload(); }
+
+// ---- run hardware self-test ----
+async function runTest(){
+  $("runBtn").disabled = true; $("checks").innerHTML = "Running…"; $("summary").textContent = "";
+  let d;
+  try { d = await (await fetch("/api/factory/selftest")).json(); }
+  catch(e){ $("checks").innerHTML=""; setMsg("readyMsg","Self-test request failed.","err"); $("runBtn").disabled=false; return; }
+  deviceId = d.device_id || deviceId; $("dev").textContent = deviceId;
+  lastCriticalPass = !!d.critical_pass;
+  $("checks").innerHTML = (d.checks||[]).map(c =>
+    `<div class="check"><span class="dot ${c.status}"></span>
+       <span class="clabel">${esc(c.label)}${c.critical?'<span class="crit">CRITICAL</span>':''}</span>
+       <span class="cdetail">${esc(c.detail||"")}</span></div>`).join("");
+  const sum = $("summary");
+  if(lastCriticalPass){ sum.className="summary go"; sum.textContent="✓ All critical checks passed — sign in to mark ready."; }
+  else { sum.className="summary no"; sum.textContent="✗ Critical check failed — fix before marking ready."; }
+  // surface current IP for the network QA section
+  const net = (d.checks||[]).find(c => c.id==="network");
+  if(net) $("netCur").innerHTML = "Current IP: <b>"+esc(net.detail||"?")+"</b>";
+  updateReadyBtn();
+  $("runBtn").disabled = false;
+}
+
+// ---- network QA: dhcp <-> static (no sign-in required) ----
+async function setNetDHCP(){ await applyNet({proto:"dhcp"}); }
+async function setNetStatic(){
+  const ip=$("sip").value.trim(), mask=$("smask").value.trim(), gw=$("sgw").value.trim();
+  const dns=$("sdns").value.split(",").map(s=>s.trim()).filter(Boolean);
+  if(!ip||!mask){ setMsg("netMsg","Static needs at least IP and netmask.","err"); return; }
+  await applyNet({proto:"static", ipaddr:ip, netmask:mask, gateway:gw, dns});
+}
+async function applyNet(cfg){
+  setMsg("netMsg","Applying "+cfg.proto+"…","warnt");
+  const {ok, data} = await postJSON("/api/factory/network", cfg);
+  if(!ok){ setMsg("netMsg",(data&&data.error)||"Network change failed.","err"); return; }
+  setMsg("netMsg","Switched to "+cfg.proto.toUpperCase()+". "+(data.note||""),"warnt");
+}
+
+// ---- mark ready + print (staff-gated) ----
+async function markReady(){
+  if(!staffToken){ setMsg("readyMsg","Sign in (above) to mark the device ready.","err"); return; }
+  if(!lastCriticalPass){ setMsg("readyMsg","Run the test and pass all critical checks first.","err"); return; }
+  $("readyBtn").disabled = true; setMsg("readyMsg","Notifying cloud…");
+  const {ok, status, data} = await postJSON("/api/factory/mark-ready", {staff_token: staffToken});
+  if(ok && data && data.success){
+    setMsg("readyMsg","✓ Device marked READY — recorded under "+staffName+". Printing label…","ok");
+    $("reprintBtn").hidden = false;
+    printLabel();
+  } else {
+    const why = (data && (data.error||data.detail)) || ("server "+status);
+    setMsg("readyMsg","Not marked ready: "+why,"err");
+    updateReadyBtn();
+  }
+}
+
+// ---- render device_id QR + print ----
+function printLabel(){
+  if(!deviceId){ setMsg("readyMsg","No device id to print.","err"); return; }
+  const qr = qrcode(0, "M");        // auto version, EC level M
+  qr.addData(deviceId);
+  qr.make();
+  $("qr").innerHTML = qr.createSvgTag({cellSize:3, margin:0, scalable:true});
+  $("qrtext").textContent = deviceId;
+  setTimeout(() => window.print(), 250);   // let the SVG lay out before printing
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m])); }
+</script>
+
+<!-- WCAG 2.4.7 — universal :focus-visible indicator. Factory-test has
+     0 onclick-on-non-button sites so no keyboard promoter shim needed,
+     just the focus outline. -->
+<style>
+  *:focus-visible { outline: 3px solid #2f81f7; outline-offset: 2px; border-radius: 4px; }
+  *:focus:not(:focus-visible) { outline: none; }
+</style>
+</body>
+</html>

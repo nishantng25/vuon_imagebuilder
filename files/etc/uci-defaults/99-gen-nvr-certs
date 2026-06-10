@@ -1,0 +1,24 @@
+#!/bin/sh
+
+# 1. Read the unique device ID
+DEVICE_ID=$(cat /etc/vuon_device_id 2>/dev/null)
+[ -z "$DEVICE_ID" ] && DEVICE_ID="sentinel-nvr"
+
+HOSTNAME="${DEVICE_ID}.local"
+IP_ADDR="192.168.1.250" # Default fallback IP
+
+# 2. Only generate if cert doesn't exist to avoid overwrite on sysupgrade
+if [ ! -f /etc/ssl/certs/server.crt ]; then
+    mkdir -p /etc/ssl/certs /etc/ssl/private
+
+    # 3. Generate cert with Subject Alternative Names (SAN)
+    # This ensures browsers accept it for BOTH the hostname and IP
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+      -keyout /etc/ssl/private/server.key \
+      -out /etc/ssl/certs/server.crt \
+      -subj "/CN=$HOSTNAME" \
+      -addext "subjectAltName = DNS:$HOSTNAME, DNS:$DEVICE_ID, IP:$IP_ADDR"
+fi
+
+exit 0
+

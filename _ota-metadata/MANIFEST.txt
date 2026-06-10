@@ -1,0 +1,70 @@
+OTA PAYLOAD MANIFEST — nvrd-core
+=================================
+Built: 2026-05-26  (host: dev sandbox, cross-built linux/amd64)
+
+PAYLOAD (2 items — verified against repos, NOT nvrd-core alone)
+  usr/sbin/nvrd-core
+    version : v3.0.0-177-g90f6f2e   (nvrd-core -version)
+    commit  : 90f6f2e  (merge: materializer + licensing-tier layer + alert-resolution C3-bis)
+    size    : 15,020,216 bytes, stripped, statically linked ELF x86-64 (CGO_ENABLED=0)
+    builds  : pure-Go sqlite (modernc) — no shared-lib deps, runs on OpenWrt musl
+  usr/share/nvrd-core/index.html
+    the tier-aware UI (Upgrade-to-Pro CTA), nvrd-recorder commit 6e2b247 (2026-05-25)
+    826,178 bytes. MUST ship with the binary — old UI + tier backend is incoherent.
+
+CHANGE AUDIT (since deployed c132d7b9, 2026-05-24) — what was checked + verdict
+  nvrd-core binary ............ CHANGED -> ship
+  index.html .................. CHANGED (May 25 CTA) -> ship
+  setup.html .................. unchanged since May 17 -> skip
+  nvrd-upload (Go) ............ unchanged (upload tier-gate is IN nvrd-core) -> skip
+  nvrd-live / -onvif / -wizard  unchanged -> skip
+  nvrd-engine / nvr-remuxer ... unchanged -> skip
+  license_check.py ............ repo copy is PRE-TIER (older than device's tier-aware
+                                one); shipping it would regress the truth file -> skip
+  C++ nvrd-recorder (wizard
+    bridge, May 25) ........... not a deployed service (no nvrd-recorder in init.d),
+                                Path B Phase 1 WIP -> skip
+
+WHAT THIS BUILD ADDS over the deployed c132d7b9
+  - licensing-tier layer: reads the tier features{} block, so a tier change no
+    longer dark-gates motion on the bare `active` boolean (THE zd641 incident fix)
+  - motion-clip materializer (was on its own branch; c132d7b9 had it, master did not)
+  - alert-resolution C3-bis: emits resolution on camera recovery
+  All three are now on one commit so the binary has the full set.
+
+UNIVERSAL PATH: /usr/sbin/nvrd-core  (root partition)
+  Chosen so the SAME path works for OTA-copy now AND ImageBuilder-baked later
+  (ImageBuilder writes the root partition only; /mysql + /mnt are data, never
+  image-managed). bk167 already here; zd641 migrates from /mysql/nvr-bin.
+
+install.sh (root, cwd=staging, run by pkg/ota AFTER safe-extract)
+  1. validate staged ELF + index.html present
+  2. rollback-backup running binary + init script + index.html -> /root/rollback-ota/<from>/
+  3. atomic install -> /usr/sbin/nvrd-core (chmod 0755)
+  4. atomic install -> /usr/share/nvrd-core/index.html (chmod 0644)
+  5. sed PROG= -> /usr/sbin/nvrd-core in /etc/init.d/nvrd-core (preserves all other params)
+  6. remove legacy /mysql/nvr-bin/nvrd-core
+  7. exit 0  (NO restart — pkg/ota does restart + /etc/vuon_version + success POST)
+
+NOT INCLUDED
+  - license_check.py: the repo copy is the old "Phase 3" version that does NOT
+    emit the tier features{} block; the devices already run a NEWER tier-aware
+    one (zd641's live truth file has tier/features/tier_display/upgrade_url).
+    Shipping the repo copy would REGRESS tiering. Get the canonical script from
+    the Django team if it needs updating.
+
+PER-DEVICE NOTES
+  bk167: PROG already /usr/sbin (rewrite is a no-op). overlay 60% (383 MB free) — safe. CANARY FIRST.
+  zd641: migrates /mysql/nvr-bin -> /usr/sbin. overlay 88% (114 MB free) — 15 MB fits,
+         but ensure OTA staging is tmpfs, not overlay. NO URGENCY: zd641 is already
+         fixed (Pro + restart), motion working on the old binary. A future ImageBuilder
+         reflash reclaims the overlay 15 MB (baked into squashfs base).
+
+FOLLOW-UPS (not in this payload)
+  - PUSH master (commit 90f6f2e is a LOCAL merge, unpushed) before OTA, for traceability.
+  - The two init scripts DIVERGE in params (zd641: -pprof/-mount/oom/respawn 5 30 0;
+    bk167: 0.0.0.0:8080/pidfile/respawn 300 5 0). Reconcile into ONE canonical
+    init script when building the ImageBuilder image.
+  - KNOWN BUG (present in this build too): a live truth-file flip active:false->true
+    does not auto-respawn MotionEngine; a tier change on a running device still needs
+    an nvrd-core restart until that's fixed.

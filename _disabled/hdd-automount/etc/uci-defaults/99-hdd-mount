@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# First-boot trigger: block hotplug coldplug doesn't reliably replay for a disk
+# that is already present before procd's hotplugd is up, so kick the automount
+# manually here. We hand manage_hdd.sh EVERY present sd* device -- it excludes
+# the OS disk itself (is_os_disk) and picks the right data disk, so this works
+# whether the data HDD is sda (eMMC-boot) or sdb (SATA-boot). Idempotent: once
+# one disk is mounted at /mnt the others short-circuit ("keeping active disk").
+for d in sda sdb sdc sdd sde sdf; do
+    [ -e "/dev/$d" ] && /usr/sbin/manage_hdd.sh add "$d"
+done
+
+exit 0

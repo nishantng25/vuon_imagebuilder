@@ -1,0 +1,22 @@
+#!/bin/sh
+
+# Seed OS-level timezone (operator can override later via the UI ->
+# /api/settings/timezone). Without this the OS clock would default to UTC,
+# which affects cron / scheduled reboots / date / log + segment wall-clock.
+# Folded in from the former set-hostname.bak, which used to set this but ran
+# LAST in uci-defaults and clobbered the per-device hostname back to 'vuonevr'.
+uci set system.@system[0].timezone='IST-5:30'
+uci set system.@system[0].zonename='Asia/Kolkata'
+
+# Per-device hostname from the provisioned device id (factory writes
+# /etc/vuon_device_id). Falls back to the image default if absent.
+DEVICE_ID=$(cat /etc/vuon_device_id 2>/dev/null)
+if [ -n "$DEVICE_ID" ]; then
+    uci set system.@system[0].hostname="$DEVICE_ID"
+fi
+
+uci commit system
+# Apply hostname + tz to the running kernel / avahi
+/etc/init.d/system reload
+/etc/init.d/avahi-daemon restart
+exit 0

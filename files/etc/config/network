@@ -1,0 +1,19 @@
+config interface 'loopback'
+        option device 'lo'
+        option proto 'static'
+        option ipaddr '127.0.0.1'
+        option netmask '255.0.0.0'
+
+config globals 'globals'
+        option ula_prefix 'fde7:fe56:6bbd::/48'
+        option packet_steering '1'
+
+# Your single hardware port, directly requesting an IP from the main router
+config interface 'lan'
+        option device 'eth0'
+        option proto 'dhcp'
+
+# (Left this intact just in case you use Tailscale for remote access)
+config interface 'tailscale'
+        option device 'tailscale0'
+        option proto 'none'

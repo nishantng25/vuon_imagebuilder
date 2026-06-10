@@ -1,0 +1,54 @@
+#!/bin/sh
+# First boot: wire up the silent VUONEVR boot display.
+#
+#   - /etc/inittab: replace the default tty1 login with evr-console.
+#   - /boot/grub/grub.cfg: hide menu, push grub+kernel output to serial,
+#     rename menuentry "OpenWrt" → "VuonEVR".
+#
+# All edits are idempotent (grep-guarded) so this is safe to re-run.
+# Backups are stamped with the first-boot date for one-shot rollback.
+
+STAMP=$(date +%Y%m%d-%H%M%S)
+
+# ─── 1. inittab: tty1 → evr-console ────────────────────────────────────────
+INITTAB=/etc/inittab
+if [ -f "$INITTAB" ] && ! grep -q "tty1::respawn:/usr/sbin/evr-console" "$INITTAB"; then
+    cp "$INITTAB" "$INITTAB.bak-$STAMP"
+    # Drop any existing tty1 line, then append ours.
+    sed -i '/^tty1::/d' "$INITTAB"
+    echo 'tty1::respawn:/usr/sbin/evr-console' >> "$INITTAB"
+    logger -t vuon-boot-display "inittab patched; backup $INITTAB.bak-$STAMP"
+fi
+
+# ─── 2. grub.cfg: silent boot + VuonEVR menuentry ──────────────────────────
+GRUB=/boot/grub/grub.cfg
+if [ -f "$GRUB" ]; then
+    NEED_PATCH=0
+    grep -q "quiet loglevel=0" "$GRUB"                   || NEED_PATCH=1
+    grep -q 'menuentry "VuonEVR"' "$GRUB"                || NEED_PATCH=1
+    grep -q '^set timeout="0"' "$GRUB"                   || NEED_PATCH=1
+    grep -q 'terminal_output serial$' "$GRUB"            || NEED_PATCH=1
+
+    if [ "$NEED_PATCH" = "1" ]; then
+        cp "$GRUB" "$GRUB.bak-$STAMP"
+
+        # 2a. Skip the menu entirely.
+        sed -i 's|^set timeout="[0-9]*"|set timeout="0"|' "$GRUB"
+
+        # 2b. Push grub output off VGA (kernel cmdline takes over).
+        sed -i 's|^terminal_input console serial; terminal_output console serial$|terminal_input serial; terminal_output serial|' "$GRUB"
+
+        # 2c. Kernel cmdline: quiet + console to serial + cursor hidden.
+        #     Idempotent — only adds the suffix if it's not already there.
+        if ! grep -q "console=ttyS0,115200" "$GRUB"; then
+            sed -i 's|\(rootwait acpi=force\)$|\1 quiet loglevel=0 vt.global_cursor_default=0 console=ttyS0,115200|' "$GRUB"
+        fi
+
+        # 2d. Rename the menuentry so the "Booting `X'" line says VuonEVR.
+        sed -i 's|menuentry "OpenWrt"|menuentry "VuonEVR"|' "$GRUB"
+
+        logger -t vuon-boot-display "grub.cfg patched; backup $GRUB.bak-$STAMP"
+    fi
+fi
+
+exit 0

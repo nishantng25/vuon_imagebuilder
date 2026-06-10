@@ -1,0 +1,156 @@
+#!/bin/sh
+# /usr/sbin/evr-console — VUON EVR welcome screen for tty1.
+# Replaces the default OpenWrt login prompt.
+#   - On first run after boot: animated logo + 3-stage progress bar
+#     (Booting → Checking system → Checking Drives).
+#   - Thereafter: steady-state status panel, redraws every 30s.
+#   - No service-shell escape. ttyS0/hvc0 and Ctrl+Alt+F2..F6 stay
+#     as normal logins for techs who need a shell.
+#
+# Procd manages the lifecycle via /etc/inittab:
+#   tty1::respawn:/usr/sbin/evr-console
+
+exec </dev/tty1 >/dev/tty1 2>&1 || true
+stty -echo 2>/dev/null || true
+setterm -blank 0 -powerdown 0 -cursor off >/dev/null 2>&1 || true
+
+CSI=$(printf '\033[')
+RESET="${CSI}0m"
+BOLD="${CSI}1m"
+DIM="${CSI}2m"
+GREEN="${CSI}32m"
+YELLOW="${CSI}33m"
+BLUE="${CSI}34m"
+CYAN="${CSI}36m"
+WHITE="${CSI}97m"
+GRAY="${CSI}90m"
+RED="${CSI}31m"
+HIDE="${CSI}?25l"
+SHOW="${CSI}?25h"
+CLEAR="${CSI}2J${CSI}H"
+
+trap "printf '%s%s' '$SHOW' '$RESET'; stty echo 2>/dev/null; exit 0" INT TERM HUP
+
+logo() {
+    cat <<BANNER
+${BOLD}${CYAN}
+   ██╗   ██╗██╗   ██╗ ██████╗ ███╗   ██╗   ███████╗██╗   ██╗██████╗
+   ██║   ██║██║   ██║██╔═══██╗████╗  ██║   ██╔════╝██║   ██║██╔══██╗
+   ██║   ██║██║   ██║██║   ██║██╔██╗ ██║   █████╗  ██║   ██║██████╔╝
+   ╚██╗ ██╔╝██║   ██║██║   ██║██║╚██╗██║   ██╔══╝  ╚██╗ ██╔╝██╔══██╗
+    ╚████╔╝ ╚██████╔╝╚██████╔╝██║ ╚████║   ███████╗ ╚████╔╝ ██║  ██║
+     ╚═══╝   ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝   ╚══════╝  ╚═══╝  ╚═╝  ╚═╝
+${RESET}
+BANNER
+}
+
+bar() {
+    pct="$1"; cap="$2"
+    [ "$pct" -gt 100 ] && pct=100
+    filled=$(( pct * 40 / 100 ))
+    empty=$(( 40 - filled ))
+    fill=""; pad=""
+    i=0; while [ $i -lt $filled ]; do fill="${fill}█"; i=$((i+1)); done
+    i=0; while [ $i -lt $empty  ]; do pad="${pad}·";    i=$((i+1)); done
+    printf "%s%s" "$CLEAR" "$HIDE"
+    logo
+    printf "\n\n   ${WHITE}[${GREEN}%s${GRAY}%s${WHITE}]  ${BOLD}%3d%%${RESET}\n" \
+        "$fill" "$pad" "$pct"
+    printf "\n   ${BOLD}${CYAN}%s${RESET}\n" "$cap"
+}
+
+boot_animation() {
+    p=0
+    while [ $p -le 33 ]; do
+        bar "$p" "VUONEVR  —  Booting...."
+        sleep 1
+        p=$(( p + 5 ))
+    done
+    while [ $p -le 66 ]; do
+        bar "$p" "Checking system...."
+        sleep 1
+        p=$(( p + 5 ))
+    done
+    while [ $p -le 100 ]; do
+        bar "$p" "Checking Drives...."
+        sleep 1
+        p=$(( p + 5 ))
+    done
+    sleep 1
+}
+
+MARKER=/tmp/.evr-console-boot-done
+if [ ! -f "$MARKER" ]; then
+    boot_animation
+    touch "$MARKER"
+fi
+
+svc_status() {
+    name="$1"
+    if pgrep -f "/usr/sbin/$name " >/dev/null 2>&1 || pgrep -x "$name" >/dev/null 2>&1; then
+        printf "%s●%s %s" "$GREEN" "$RESET" "$name"
+    else
+        printf "%s●%s %s%s%s" "$RED" "$RESET" "$DIM" "$name" "$RESET"
+    fi
+}
+
+license_field() {
+    [ -f /var/run/cctv-license-state ] || { printf "?"; return; }
+    sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" /var/run/cctv-license-state | head -1
+}
+
+mqtt_status() {
+    last=$(logread 2>/dev/null | grep "mqtt_command: started" | tail -1)
+    if [ -n "$last" ]; then
+        printf "%s●%s subscribed" "$GREEN" "$RESET"
+    else
+        printf "%s●%s %soffline%s" "$YELLOW" "$RESET" "$DIM" "$RESET"
+    fi
+}
+
+while true; do
+    DEV_ID=$(cat /etc/vuon_device_id 2>/dev/null || echo "(unset)")
+    VERSION=$(cat /etc/vuon_version 2>/dev/null || /usr/sbin/nvrd-core --version 2>&1 | awk '{print $NF; exit}')
+    [ -z "$VERSION" ] && VERSION="(unknown)"
+    IP=$(ip -4 addr show eth0 2>/dev/null | awk '/inet / {print $2}' | head -1 | cut -d/ -f1)
+    [ -z "$IP" ] && IP="(no network)"
+    UPTIME=$(awk '{printf "%dd %dh %dm", $1/86400, ($1%86400)/3600, ($1%3600)/60}' /proc/uptime)
+
+    TIER=$(license_field "tier_display");   [ -z "$TIER" ] && TIER="(unknown)"
+    PLAN=$(license_field "plan_code")
+    STATUS=$(license_field "status")
+    LIC_LINE="$TIER"
+    [ -n "$PLAN" ]   && LIC_LINE="$LIC_LINE · $PLAN"
+    [ -n "$STATUS" ] && LIC_LINE="$LIC_LINE · $STATUS"
+
+    CAM_DB=/mysql/data/db/nvr.db
+    [ ! -f "$CAM_DB" ] && CAM_DB=/mnt/data/db/nvr.db
+    CAM_COUNT="?"
+    if [ -f "$CAM_DB" ]; then
+        CAM_COUNT=$(sqlite3 -batch "$CAM_DB" \
+            "SELECT COUNT(*) FROM cameras WHERE deleted_at IS NULL AND enabled=1;" \
+            2>/dev/null || echo "?")
+    fi
+
+    printf "%s%s" "$CLEAR" "$HIDE"
+    logo
+    cat <<PANEL
+   ${WHITE}┌────────────────────────────────────────────────────────────────┐${RESET}
+   ${WHITE}│${RESET}  ${BOLD}Device:${RESET}   ${DEV_ID}
+   ${WHITE}│${RESET}  ${BOLD}Version:${RESET}  ${DIM}${VERSION}${RESET}
+   ${WHITE}│${RESET}  ${BOLD}License:${RESET}  ${YELLOW}${LIC_LINE}${RESET}
+   ${WHITE}│${RESET}  ${BOLD}LAN IP:${RESET}   ${BLUE}${IP}${RESET}     ${BOLD}Uptime:${RESET} ${UPTIME}
+   ${WHITE}├────────────────────────────────────────────────────────────────┤${RESET}
+   ${WHITE}│${RESET}  $(svc_status nvrd-core)     $(svc_status nvrd-engine)    $(svc_status nvrd-upload)
+   ${WHITE}│${RESET}  $(svc_status nvrd-live)     ${GREEN}●${RESET} ${CAM_COUNT} cameras configured
+   ${WHITE}│${RESET}  $(mqtt_status) on mqtt.vuon.in:8883
+   ${WHITE}├────────────────────────────────────────────────────────────────┤${RESET}
+   ${WHITE}│${RESET}  ${BOLD}Web UI:${RESET}   ${CYAN}http://${IP}:8080/${RESET}
+   ${WHITE}│${RESET}  ${BOLD}Support:${RESET}  support@vuon.in
+   ${WHITE}└────────────────────────────────────────────────────────────────┘${RESET}
+
+                  ${GRAY}Auto-refresh every 30s · $(date +%H:%M:%S)${RESET}
+
+PANEL
+    sleep 30
+done

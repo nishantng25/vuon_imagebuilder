@@ -1,0 +1,141 @@
+/* =============================================================================
+ * Pin effects — pulse, halo, blink. CSS-only animations: the browser
+ * compositor runs these off the main thread so 16 pins animating at 60 fps
+ * cost zero JavaScript. JS only toggles classes when SSE events arrive.
+ *
+ * Targets the existing operator pin overlay (.sv-pin-svg) AND the admin
+ * pin editor overlay (.sv-pin-svg in #sv-pin-overlay). Both use the same
+ * SVG shape so one set of selectors covers both.
+ *
+ * Naming: data-scada-state="recording|motion|offline" attribute drives
+ * which effect plays. Layered so a single pin can be both recording AND
+ * mid-motion-pulse — they composite cleanly.
+ * ========================================================================== */
+
+/* The "ring" element inside .sv-pin-svg is the camera dot's outer circle.
+ * Pulse animates its scale + opacity, NOT the dot itself, so the camera
+ * number label stays readable. We add a second invisible ring element via
+ * JS for the motion halo so the recording pulse + motion halo don't fight
+ * for the same DOM node. */
+
+@keyframes scada-pulse-rec {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  50%  { transform: scale(1.3); opacity: 0.08; }
+  100% { transform: scale(1);   opacity: 0.55; }
+}
+
+@keyframes scada-halo-motion {
+  0%   { transform: scale(1);   opacity: 0.95; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+
+@keyframes scada-blink-offline {
+  0%, 100% { opacity: 1;   }
+  50%      { opacity: 0.18; }
+}
+
+/* RECORDING — gentle 2 s breathing pulse on the outer ring. Selected pin
+ * (already highlighted) gets a slightly stronger amplitude so the operator
+ * can tell "this one is selected AND recording" at a glance. */
+.sv-pin-svg[data-scada-state*="recording"] .sv-pulse-rec,
+.sv-pin-svg[data-scada-state*="recording"] .sv-pin-ring,
+.sv-pin-svg[data-scada-state*="recording"] .ring {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: scada-pulse-rec 2s ease-in-out infinite;
+}
+
+/* MOTION HALO — single 1.2 s expand-and-fade ring. JS adds the class on
+ * motion event, removes it 1.4 s later (slightly longer than the animation
+ * so the keyframe finishes before class removal). */
+.sv-pin-svg .sv-motion-halo {
+  pointer-events: none;
+  transform-origin: center;
+  transform-box: fill-box;
+  opacity: 0;
+}
+.sv-pin-svg[data-scada-state*="motion"] .sv-motion-halo {
+  animation: scada-halo-motion 1.2s ease-out 1;
+  /* Stops at the last keyframe (transform=scale(2.6), opacity=0) instead
+     of snapping back to opacity:0 / scale(1). Important: without this the
+     halo flickers visibly between animation end and class-removal. */
+  animation-fill-mode: forwards;
+}
+
+/* OFFLINE — solid red fill, no ambiguity. Visible at a glance from the
+ * other side of the room. A subtle 2 s blink remains so the operator's
+ * eye is drawn to the change, but the colour itself is unmistakable
+ * even when the blink is at its dimmer half-cycle.
+ *
+ * data-scada-state can in theory include both "offline" and "recording"
+ * but in practice they're mutually exclusive (offline means no RTSP,
+ * so no recording). */
+@keyframes scada-blink-offline-subtle {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.62; }
+}
+.sv-pin-svg[data-scada-state*="offline"] .core,
+.sv-pin-svg[data-scada-state*="offline"] .sv-pin-ring,
+.sv-pin-svg[data-scada-state*="offline"] .ring {
+  animation: scada-blink-offline-subtle 2s ease-in-out infinite;
+}
+.sv-pin-svg[data-scada-state*="offline"] .core {
+  fill: #d95a50 !important;
+  fill-opacity: 1 !important;
+}
+.sv-pin-svg[data-scada-state*="offline"] .sv-pin-ring,
+.sv-pin-svg[data-scada-state*="offline"] .ring {
+  stroke: #d95a50 !important;
+  stroke-width: 2.5 !important;
+}
+.sv-pin-svg[data-scada-state*="offline"] text {
+  fill: #fff !important;       /* number stays readable on the solid red */
+  font-weight: 800 !important;
+}
+
+/* =============================================================================
+ * Admin pin editor smoothness — applies to .sv-pin-svg only when it lives
+ * under #sv-pin-overlay (the admin canvas). The operator pin overlay sits
+ * under #sv-monitor-canvas and is NOT subject to these transitions.
+ *
+ * - The cone <polygon> gets a 60 ms CSS transition on transform so slider-
+ *   driven rotation looks like the pin is settling rather than jumping.
+ * - The whole pin SVG gets a transition on left/top so drag drops settle
+ *   instead of teleport.
+ * ========================================================================== */
+#sv-pin-overlay .sv-pin-svg {
+  transition: left 60ms cubic-bezier(.2,.7,.2,1),
+              top  60ms cubic-bezier(.2,.7,.2,1);
+}
+#sv-pin-overlay .sv-pin-svg polygon {
+  transition: transform 80ms cubic-bezier(.2,.7,.2,1);
+}
+
+/* Dragging — show the user the pin is "lifted". JS adds .scada-dragging
+ * during pointer-event drag (replaces the native HTML5 drag ghost). */
+#sv-pin-overlay .sv-pin-svg.scada-dragging {
+  transition: none;                     /* tracks cursor 1:1, no easing */
+  filter: drop-shadow(0 6px 12px rgba(0,0,0,0.45));
+  cursor: grabbing;
+  z-index: 10;
+}
+#sv-pin-overlay .sv-pin-svg.scada-dragging .sv-pin-ring,
+#sv-pin-overlay .sv-pin-svg.scada-dragging .ring {
+  stroke-width: 3 !important;
+}
+
+/* =============================================================================
+ * Hide the monolith's per-pin flat-triangle cones once the new wall-aware
+ * fov_renderer.js is active. We can't gracefully fold the new code into the
+ * monolith's per-pin SVG (different scaling / different math), so the
+ * cleanest approach is: monolith stops drawing cones (CSS hide), and our
+ * page-level overlay paints the wall-aware visibility polygons over the
+ * same canvas. Pin dots + camera labels stay visible (they're <circle>
+ * and <text>, not <polygon>).
+ *
+ * Gated by data-scada-walls-fov on body so a rollback is one attribute
+ * toggle away.
+ * ========================================================================== */
+body[data-scada-walls-fov="1"] .sv-pin-svg polygon {
+  display: none !important;
+}

@@ -1,0 +1,37 @@
+#!/bin/sh
+# First boot: harden remote access to KEY-ONLY for root.
+#
+# SAFETY INTERLOCK: this only engages if a root SSH public key was actually
+# baked into /etc/dropbear/authorized_keys (present AND non-empty). If the key
+# is missing, we do NOTHING — better to leave the device reachable than to ship
+# a locked-out brick (no password + no key = console-only). So an image without
+# the key is simply not hardened; an image WITH the key is locked down.
+#
+# When engaged:
+#   - root password is locked ('*' in /etc/shadow) -> no password login, SSH or console
+#   - dropbear password auth disabled -> public-key auth only
+#   => the baked key (the owner's) becomes the SOLE means of access.
+
+AKEYS=/etc/dropbear/authorized_keys
+
+if [ ! -s "$AKEYS" ]; then
+    logger -t harden-root "NO $AKEYS (or empty) -> NOT locking root (would be a lockout). Access left as-is."
+    exit 0
+fi
+
+# Lock the root password: replace the hash field with '*' (no crypt() input can
+# ever match), disabling all password-based root login (SSH and console).
+if [ -f /etc/shadow ]; then
+    sed -i 's|^root:[^:]*:|root:*:|' /etc/shadow
+    logger -t harden-root "root password locked (key-only)"
+fi
+
+# Dropbear: public-key auth only.
+uci set dropbear.@dropbear[0].PasswordAuth='0'
+uci set dropbear.@dropbear[0].RootPasswordAuth='0'
+uci set dropbear.@dropbear[0].RootLogin='1'        # root may still log in — by KEY
+uci commit dropbear
+/etc/init.d/dropbear reload 2>/dev/null || /etc/init.d/dropbear restart 2>/dev/null
+
+logger -t harden-root "dropbear set to key-only auth; root access is now the baked key alone"
+exit 0

@@ -1,0 +1,159 @@
+#!/bin/sh
+# First boot: PROVISION + MOUNT the OS disk's data area.
+#
+# Whatever disk the OS booted from (eMMC / USB / SATA — auto-detected as the
+# disk backing /rom), carve its unused space into:
+#   * swap  = 1 GiB                 (label=swap)
+#   * /mysql = everything else      (ext4, label=mysql)
+# then mount /mysql and enable swap, pinned by UUID in uci fstab so block-mount
+# re-applies them on every later boot (before nvrd-core).
+#
+# WHY PROVISION HERE: the image is flashed (balenaEtcher / dd) straight onto a
+# disk much larger than the ~1 GiB image. The image's GPT only describes the EFI
+# + rootfs partitions and its BACKUP header sits at the ~1 GiB mark, so the rest
+# of the disk is invisible ("Total free space 0"). We relocate the backup GPT to
+# the true end of the disk (sgdisk -e), then append swap + mysql in the freed
+# space. EXISTING partitions (EFI, rootfs, any BIOS-boot entry) are never touched
+# — we only allocate previously-unused sectors and only mkfs the new mysql/swap.
+#
+# Idempotent + crash-safe: if a prior boot created the partitions but didn't
+# finish (mkfs/registration), this re-uses the existing GPT entries by name and
+# just formats/registers/mounts. If the new partition can't be registered on the
+# busy disk this run, the script exits non-zero so uci-defaults retries it next
+# boot (a clean boot re-reads the table and the partitions appear). If there's no
+# usable free space, /mysql simply stays on the overlay and the DB still works.
+
+MP=/mysql
+SWAP_MIB=1024
+
+# ---------------------------------------------------------------------------
+# provision(): create swap + mysql in the OS disk's free space if absent.
+# Returns 0 (done / nothing-to-do / gave-up-gracefully) or 2 (retry next boot).
+# ---------------------------------------------------------------------------
+provision() {
+    # Already have a mysql-labelled filesystem somewhere? Nothing to create.
+    block info 2>/dev/null | grep -q 'LABEL="mysql"' && return 0
+
+    # OS disk = the disk backing /rom (the read-only squashfs root); /boot is a
+    # fallback for layouts that don't expose /rom.
+    #
+    # We resolve via `block info` rather than /proc/mounts because on SATA/USB
+    # the kernel reports /rom as "/dev/root" — a synthetic symlink that does
+    # NOT exist in /sys/class/block, so the disk-from-partition lookup below
+    # silently fails. `block info` always prints the real device path
+    # (/dev/sda2, /dev/mmcblk1p2, …). /proc/cmdline is the last-ditch fallback.
+    rompart=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*MOUNT="/rom".*#\1#p' | head -1)
+    [ -n "$rompart" ] || rompart=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*MOUNT="/boot".*#\1#p' | head -1)
+    if [ -z "$rompart" ]; then
+        pu=$(sed -n 's/.*root=PARTUUID=\([0-9a-fA-F-]*\).*/\1/p' /proc/cmdline 2>/dev/null)
+        [ -n "$pu" ] && rompart=$(findfs PARTUUID="$pu" 2>/dev/null)
+    fi
+    [ -n "$rompart" ] || { logger -t mount-data "no /rom or /boot device — cannot locate OS disk"; return 0; }
+    pbase=${rompart#/dev/}
+    disk=$(basename "$(readlink -f "/sys/class/block/$pbase/.." 2>/dev/null)")
+    [ -n "$disk" ] && [ -b "/dev/$disk" ] || { logger -t mount-data "cannot resolve OS disk from $rompart"; return 0; }
+    target="/dev/$disk"
+    # Partition node separator: mmcblk/nvme/loop use 'pN', sd* use 'N'.
+    case "$disk" in mmcblk*|nvme*|loop*) psep="p" ;; *) psep="" ;; esac
+
+    # Re-use GPT entries already named mysql/swap (a prior interrupted run).
+    myn=$(sgdisk -p "$target" 2>/dev/null | awk '$NF=="mysql"{print $1; exit}')
+    swn=$(sgdisk -p "$target" 2>/dev/null | awk '$NF=="swap"{print $1; exit}')
+
+    if [ -z "$myn" ]; then
+        # Relocate the backup GPT header to the true end of disk so the unused
+        # tail becomes allocatable (the flashed image pins it at the rootfs end).
+        sgdisk -e "$target" >/dev/null 2>&1
+
+        free=$(sgdisk -p "$target" 2>/dev/null | sed -n 's/.*Total free space is \([0-9]\{1,\}\) sectors.*/\1/p')
+        min=$(( (SWAP_MIB + 256) * 2048 ))   # need >= swap + 256 MiB (512-byte sectors)
+        if [ -n "$free" ] && [ "$free" -lt "$min" ]; then
+            logger -t mount-data "$target: only ${free}s free after GPT expand — too small to provision; /mysql stays on overlay"
+            return 0
+        fi
+
+        # Lowest two FREE GPT partition numbers (1..128). Can't assume 3/4: the
+        # combined-efi image also has a BIOS-boot entry at slot 128.
+        used=$(sgdisk -p "$target" 2>/dev/null | awk '$1 ~ /^[0-9]+$/{print $1}')
+        myn=""; swn=""; n=1
+        while [ "$n" -le 128 ]; do
+            if ! echo "$used" | grep -qx "$n"; then
+                if [ -z "$myn" ]; then myn=$n
+                elif [ -z "$swn" ]; then swn=$n; break; fi
+            fi
+            n=$((n+1))
+        done
+        [ -n "$myn" ] && [ -n "$swn" ] || { logger -t mount-data "$target: no free GPT slots"; return 0; }
+
+        # mysql = all free space minus the trailing swap; swap = trailing 1 GiB.
+        sgdisk -n "${myn}:0:-${SWAP_MIB}M" -t "${myn}:8300" -c "${myn}:mysql" \
+               -n "${swn}:0:0"             -t "${swn}:8200" -c "${swn}:swap" "$target" >/dev/null 2>&1
+    fi
+
+    # Tell the (busy) kernel about the new partitions — a full re-read would
+    # EBUSY because /rom is mounted, so add just the new ones.
+    partx -a "$target" 2>/dev/null || partprobe "$target" 2>/dev/null
+    sleep 1
+
+    mydev="${target}${psep}${myn}"
+    swdev="${target}${psep}${swn}"
+    if [ ! -b "$mydev" ]; then
+        logger -t mount-data "$mydev not visible yet — retrying next boot"
+        return 2
+    fi
+    block info "$mydev" 2>/dev/null | grep -q 'LABEL="mysql"' || mkfs.ext4 -F -L mysql "$mydev" >/dev/null 2>&1
+    if [ -b "$swdev" ]; then
+        block info "$swdev" 2>/dev/null | grep -q 'TYPE="swap"' || mkswap -L swap "$swdev" >/dev/null 2>&1
+    fi
+    logger -t mount-data "provisioned $target: mysql=$mydev swap=$swdev"
+    return 0
+}
+
+provision
+PROVISION_RC=$?
+
+# ---- /mysql (ext4, label=mysql) ----
+DEV=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*LABEL="mysql".*#\1#p' | head -1)
+if [ -n "$DEV" ]; then
+    UUID=$(block info "$DEV" 2>/dev/null | grep -o 'UUID="[^"]*"' | cut -d'"' -f2)
+    if [ -n "$UUID" ]; then
+        umount "$DEV" 2>/dev/null            # release it if auto_mount grabbed it
+        mkdir -p "$MP"
+        uci -q delete fstab.mysqlmnt
+        uci set fstab.mysqlmnt=mount
+        uci set fstab.mysqlmnt.target="$MP"
+        uci set fstab.mysqlmnt.uuid="$UUID"
+        uci set fstab.mysqlmnt.enabled='1'
+        logger -t mount-data "configured /mysql -> $DEV ($UUID)"
+    fi
+else
+    logger -t mount-data "no 'mysql' partition found — /mysql stays on overlay"
+fi
+
+# ---- swap ----
+# A swap area has NO filesystem UUID that `block info` exposes (only a GPT
+# PARTUUID), so pin the fstab entry by DEVICE path, not uuid. The OS disk is
+# fixed on this appliance, so /dev/sdaN (or mmcblkXpN) is stable across boots.
+SWAPDEV=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*TYPE="swap".*#\1#p' | head -1)
+if [ -n "$SWAPDEV" ]; then
+    uci -q delete fstab.swapdev
+    uci set fstab.swapdev=swap
+    uci set fstab.swapdev.device="$SWAPDEV"
+    uci set fstab.swapdev.enabled='1'
+    logger -t mount-data "configured swap -> $SWAPDEV (by device)"
+else
+    logger -t mount-data "no swap partition found"
+fi
+
+uci commit fstab
+block mount        # mounts /mysql and enables swap per the fstab entries
+[ -n "$SWAPDEV" ] && swapon "$SWAPDEV" 2>/dev/null   # ensure swap is active this boot
+mkdir -p "$MP/data/db"
+
+# If provisioning created partitions the kernel hasn't surfaced yet, keep this
+# script (non-zero exit) so uci-defaults retries on the next, clean boot.
+if [ "$PROVISION_RC" = "2" ] && ! block info 2>/dev/null | grep -q 'LABEL="mysql"'; then
+    logger -t mount-data "provisioning incomplete — will retry next boot"
+    exit 1
+fi
+exit 0

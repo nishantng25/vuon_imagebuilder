@@ -1,0 +1,46 @@
+EVR IMAGEBUILDER OVERLAY — rootfs files/ tree
+=============================================
+Assembled 2026-05-26 from bk167 (reference device = v3 absorbed-monolith
+architecture, "Option A") + our new nvrd-core build. Bake the etc/ usr/ srv/
+trees as the ImageBuilder FILES overlay — paths are exact rootfs destinations.
+DO NOT bake _ota/ (this metadata + OTA artifacts, not rootfs).
+
+DAEMONS (/usr/sbin)
+  nvrd-core         15,020,216  v3.0.0-177-g90f6f2e  md5 434f28b0057e35d881e6e15ee5aeadd6
+                                 (OUR build: motion-clip materializer + licensing-tier layer + alert-resolution C3-bis)
+  nvrd-engine       11,178,168  bk167 live 2026-05-17
+  nvrd-live          6,717,624  bk167 live 2026-05-17
+  nvrd-upload       12,419,256  bk167 live 2026-05-23 (Go uploader)
+  nvr-remuxer        2,343,064  bk167 live 2026-05-22  (spawned by nvrd-engine)
+  nvr-recorder-rrtp    136,944  bk167 live 2026-05-16  (spawned by nvrd-engine)
+
+INIT.D (/etc/init.d) — every PROG verified present in this overlay
+  nvrd-core    -> /usr/sbin/nvrd-core
+  nvrd-engine  -> /usr/sbin/nvrd-engine  (+ nvr-remuxer, nvr-recorder-rrtp)
+  nvrd-live    -> /usr/sbin/nvrd-live
+  nvrd-upload  -> /usr/sbin/nvrd-upload
+
+UI (/usr/share/nvrd-core)
+  index.html   826,178  md5 3e051d5e8f8507c35276595cda28698a  (tier-aware + Upgrade-to-Pro CTA)
+  setup.html   165,532  unchanged since 2026-05-17
+
+SCRIPTS (/srv/cctv/scripts)
+  license_check.py  /1.1  md5 f120bbbd77df85e4f3efb29a4ffcb531
+                    (sends uptime_s + device_time anti-clone signals; UA cctv-license-check/1.1)
+
+DECISIONS APPLIED (2026-05-26)
+  1. Dropped legacy nvrd-recorder init.d — its /usr/sbin/nvrd-recorder binary doesn't
+     exist on bk167; nvrd-core replaced it ("Replaces nvrd-recorder + nvrd-live from v2.x").
+  2. license_check.py swapped from bk167's old Phase-3 to repo /1.1 (anti-clone).
+  3. Architecture A (absorbed-monolith): nvrd-core absorbs ONVIF + wizard + recorder, so
+     NO separate nvrd-onvif / nvrd-wizard / nvr_app daemons (those are zd641 LEGACY; an image
+     flash retires them, nvrd-core takes over).
+
+EXCLUDED — never bake (per-device state)
+  /etc/vuon_device_id (identity), /mysql/data (DB), /mnt/data (recordings),
+  /var/run/cctv-license-state + /etc/vuon_version (per-device license/version),
+  logs, and the *.bak-* editor backups that were stripped from usr/share/nvrd-core.
+
+CAVEAT: the non-nvrd-core daemons are bk167's CURRENT live binaries (their harvest dates
+above), not rebuilt from latest source. That's the coherent live-fleet baseline; if you
+want newer engine/live/upload, rebuild those from their repos and drop them in here.

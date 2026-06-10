@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+# nvrd-live — Go live-stream proxy on :8081, fetches /api/cameras from recorder.
+USE_PROCD=1
+START=94
+STOP=10
+
+PROG=/usr/sbin/nvrd-live
+NAME=nvrd-live
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG" \
+        -listen 0.0.0.0:8081 \
+        -recorder http://127.0.0.1:8080
+    procd_set_param respawn 300 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param pidfile /var/run/$NAME.pid
+    procd_close_instance
+}

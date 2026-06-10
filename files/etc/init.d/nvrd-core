@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+# nvrd-core — v3.0 Go monolith. Serves wizard / Day-2 UI / Setup API +
+# motion engine + ONVIF + telemetry. Replaces nvrd-recorder + nvrd-live
+# from v2.x; coexists with nvrd-engine (continuous recording owner) and
+# nvrd-upload.
+USE_PROCD=1
+START=92
+STOP=10
+
+PROG=/usr/sbin/nvrd-core
+NAME=nvrd-core
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG" \
+        -db /mysql/data/db/nvr.db \
+        -http 0.0.0.0:8080 \
+        -setup-html /usr/share/nvrd-core/setup.html \
+        -index-html /usr/share/nvrd-core/index.html \
+        -device-id /etc/vuon_device_id
+    procd_set_param respawn 300 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param pidfile /var/run/$NAME.pid
+    procd_close_instance
+}

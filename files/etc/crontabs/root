@@ -1,0 +1,8 @@
+# Refresh the license truth file every 15 minutes.
+# license_check.py reads /etc/cctv-license.conf (BASE_URL + DEVICE_ID + TOKEN,
+# written by nvrd-core on link/resync) → calls the cloud → writes
+# /var/run/cctv-license-state, which nvrd-core reads to drive the licensed
+# (Active) state. Requires python3-openssl (stdlib ssl) in the image.
+# Without this cron the truth file is only produced on a manual resync and
+# never refreshed, so entitlement drifts to stale/fail-open.
+*/15 * * * * /srv/cctv/scripts/license_check.py >/dev/null 2>&1

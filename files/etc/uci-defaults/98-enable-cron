@@ -1,0 +1,8 @@
+#!/bin/sh
+# First boot: enable + start busybox cron so the baked /etc/crontabs/root
+# runs. OpenWrt ships cron disabled by default; the license-truth-file
+# refresh (license_check.py every 15 min) depends on it. Idempotent.
+/etc/init.d/cron enable 2>/dev/null
+/etc/init.d/cron restart 2>/dev/null
+logger -t enable-cron "cron enabled + started for /etc/crontabs/root (license_check refresh)"
+exit 0
