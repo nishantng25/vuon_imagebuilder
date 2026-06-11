@@ -2651,8 +2651,11 @@
         loadDrives();
     }
 
-    // Fetch /api/list_drives and render one row per disk (sda is hidden
-    // server-side). Each row has a "Format & Mount" button that calls
+    // Fetch /api/list_drives and render one row per disk. The OS/boot disk
+    // is hidden server-side by MOUNT ROLE (whatever backs /, /boot, /usr,
+    // /etc) — NOT by device name. Never assume sda==OS: /dev/sdX letters are
+    // assigned by probe order and a SATA vs USB-bridge race can swap them
+    // between boots/units. Each row has a "Format & Mount" button that calls
     // formatHardDrive(device).
     async function loadDrives() {
         const listEl = document.getElementById('drives_list');
@@ -2929,8 +2932,9 @@
 
     // --- STEP 2: FORMAT DRIVE API CALL ---
     // Wipes all partitions on /dev/<device>, creates one ext4 partition
-    // spanning the disk, and mounts it at /mnt. Server rejects sda and
-    // anything that isn't a whole disk.
+    // spanning the disk, and mounts it at /mnt. Server refuses to format the
+    // OS/boot disk (detected by mount role, not by name) and anything that
+    // isn't a whole disk.
     async function formatHardDrive(device) {
         if (!device) { alert('Pick a hard drive first.'); return; }
         if (!confirm(

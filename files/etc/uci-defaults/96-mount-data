@@ -131,16 +131,32 @@ else
 fi
 
 # ---- swap ----
-# A swap area has NO filesystem UUID that `block info` exposes (only a GPT
-# PARTUUID), so pin the fstab entry by DEVICE path, not uuid. The OS disk is
-# fixed on this appliance, so /dev/sdaN (or mmcblkXpN) is stable across boots.
-SWAPDEV=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*TYPE="swap".*#\1#p' | head -1)
+# Pin swap name-INDEPENDENTLY. /dev/sdXN letters are assigned by probe order,
+# so a SATA disk vs USB-SATA bridge race can swap them between boots (the exact
+# failure that put the data HDD on sda and the OS bridge on sdb). A device-path
+# fstab entry would then enable swap on the WRONG partition after a reboot.
+# Resolve the partition fresh from the GPT PARTLABEL=swap we set above, then
+# persist the fstab entry by the strongest stable id block-mount can re-resolve
+# each boot: swap-header UUID, else its LABEL (we ran `mkswap -L swap`), and
+# only fall back to a device path if neither is exposed on this platform.
+SWAPDEV=$(findfs PARTLABEL=swap 2>/dev/null)
+[ -b "$SWAPDEV" ] || SWAPDEV=$(block info 2>/dev/null | sed -n 's#^\(/dev/[^:]*\):.*TYPE="swap".*#\1#p' | head -1)
 if [ -n "$SWAPDEV" ]; then
+    SWAPUUID=$(block info "$SWAPDEV" 2>/dev/null | grep -o 'UUID="[^"]*"' | cut -d'"' -f2)
+    SWAPLABEL=$(block info "$SWAPDEV" 2>/dev/null | grep -o 'LABEL="[^"]*"' | cut -d'"' -f2)
     uci -q delete fstab.swapdev
     uci set fstab.swapdev=swap
-    uci set fstab.swapdev.device="$SWAPDEV"
+    if [ -n "$SWAPUUID" ]; then
+        uci set fstab.swapdev.uuid="$SWAPUUID"
+        logger -t mount-data "configured swap -> UUID=$SWAPUUID ($SWAPDEV)"
+    elif [ -n "$SWAPLABEL" ]; then
+        uci set fstab.swapdev.label="$SWAPLABEL"
+        logger -t mount-data "configured swap -> LABEL=$SWAPLABEL ($SWAPDEV)"
+    else
+        uci set fstab.swapdev.device="$SWAPDEV"
+        logger -t mount-data "configured swap -> $SWAPDEV (by device; no stable id exposed)"
+    fi
     uci set fstab.swapdev.enabled='1'
-    logger -t mount-data "configured swap -> $SWAPDEV (by device)"
 else
     logger -t mount-data "no swap partition found"
 fi
